@@ -1,0 +1,572 @@
+---
+title: "PSTAT131 Final Project - FastFood Menu Prediction"
+author: "Jennie"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: "hide"
+    fig_caption: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE)
+```
+
+# Introduction
+Have you ever wondered how different the menus are from all the fastfood companies? From McDonald's, Burger King, to KFC. Are they really that different from each other or they share similar recipes? Well, we are going to find out! In this project, we will build different machine learning models to classify fastfood companies based on nutrition facts from their menus. Different techniques, such as Principal Components Analysis (PCA), are adopted to help the model make better predictions. Various models with different values for hyperparameters are tuned to train the best model.
+
+![FastFood Companies](fastfoodpic.png)
+
+Before diving into the project, let's make sure we understand nutrition facts. These labels are everywhere nowadays, but not too many people understand what they really mean. Let's break it down a bit.
+
+![Nutrition Facts](nutrition.png)
+
+* Calories: calories is usually the very first thing we check on a nutrition fact label. It refers to the energy people get from the food or drink they consume. The number we see on the label is measured in kilocalories (kcal). On average, average adult man needs 2,700 kcal and average woman needs 2,200 kcal daily. 
+* Total Fat: Fat is found on foods from both plants and animals. Total fat in the label includes:
+  + Saturated Fat: usually found in animal products and solid at room temperature
+  + Trans Fat: trans fat is the worst type of fat for the heart, blood vessels
+    - formed naturally: usually found in dairy products, beef and lambs
+    - formed artificially: formed during food processing, such as baked goods, snacks, and fried food
+* Cholesterol: it is a substance that the body needs to function; however, people don't need to get cholesterol from food since liver produces enough cholesterol to support our body. The cholesterol from our diets is extra, which is the main reason why we want to limit the intake of cholesterol, especialy for people with heart disease. The main sources of cholesterol are the saturated and trans fat we mentioned above
+* Sodium: Our bodies need a small amount of sodium to work properly and consuming too much sodium can be bad for our health, which could lead to heart disease. Most dietary sodium comes from eating packaged and prepared foods instead of the one added to food when cooking
+* Carbohydrates: Carbohydrates provide the body with glucose, which is converted to energy used to support physical acitivities. The quality of carbohydrates is more important than quantity. For example, whole wheat bread is a better choice than highly refined white bread
+* Fiber: Fiber is a type of carbohydrate that the body can’t digest. While most carbohydrates could be broken down into sugar molecules, glucose, fiber cannot be broken down, and instead it passes through the body undigested. Great sources of fiber are whole grains, fruits, and vegetables.
+* Sugar: Sugar is a carbohydrate that comes in many different forms and can be found everywhere naturally. However, added sugar supplies no extra nutritional value to a meal, and our bodies do not need it to function. It serves only to add calories to our daily energy intake, and unused calories are turned into fat and extra weight.
+* Protein: Protein is a nutrient your body needs to grow and repair cells, and to work properly. Most common sources are meat, dairy products, and nuts. 
+
+After this breakdown, do you understand better the nutrition facts of food we consume daily? Especially for fast food, they tend to be high in sodium, sugar, saturated fats, trans fats, calories, and processed preservatives that are bad for our health. Therefore, to maintain a healthy liftstyle, it is important to limit our consumption of fast food. (I have to admit they are YUMMY though!) Without further due, let's dive into all the menus from these companies and find out how different they are!
+
+# Loading Packages & Data
+```{r echo=FALSE}
+library(tidyverse)
+library(dplyr)
+library(tidymodels)
+library(patchwork)
+library(readr)
+library(kknn)
+library(discrim)
+library(glmnet)
+library(corrr)
+library(ggcorrplot)
+library(factoextra)
+library(corrplot)
+library(kernlab)
+library(janitor)
+library(randomForest)
+library(xgboost)
+library(vip)
+library(ranger)
+library(tidytext)
+library(DALEXtra)
+library(hrbrthemes)
+library(ggplot2)
+library(prettydoc)
+theme_set(theme_bw())
+tidymodels_prefer()
+set.seed(1105)
+```
+The data was taken from the Kaggle dataset [Fast Food Nutrition](https://www.kaggle.com/datasets/joebeachcapital/fast-food/data?select=FastFoodNutritionMenuV3.csv), collected by Joakim Arvidsson.
+
+*The dataset contains a decent amount of blank spaces to represent missing values, yet for some reasons R cannot detect these values, so I manually downloaded the dataset and replace those missing values with -99 to replace them with NA when reading the file*
+
+# Data Processing
+Before training our model, we should understand the dataset and handle any uncommon data to avoid unexpected behavior of the model. Let's load our dataset first!
+
+## Loading
+```{r}
+fastfood <- read.csv("FastFoodNutritionMenuV2.csv", 
+                     na=c("", " ", "-99"), 
+                     colClasses=c(rep("character",14))) %>% 
+            mutate(Company = factor(Company, levels = c("McDonald’s", "Burger King", "Wendy’s", "KFC", "Taco Bell", "Pizza Hut")))
+
+colnames(fastfood) <- c("Company", "Item", "Calories", "Calories_from_Fat",
+                        "Total_Fat_g", "Saturated_Fat_g", "Trans_Fat_g",
+                        "Cholesterol_mg", "Sodium_mg", "Carbs_g",
+                        "Fiber_g", "Sugar_g", "Protein_g",
+                        "Weight_Watchers_pnts")
+str(fastfood)
+```
+Currently, there are 1144 rows with 14 columns in the dataset, which means there are 1144 different food options and 14 possible predictors. One of the variables, `Company` is our response. `Item` doesn't provide any useful information in predicting the Company, so we will not use this predictor, which leaves us with 12 predictors, including `Calories`, `Calories from Fat`, `Total Fat(g)`, `Saturated Fat(g)`, `Trans Fat(g)`, `Cholesterol(mg)`, `Sodium(mg)`, `Carbs(g)`, `Fiber(g)`, `Sugars(g)`, `Protein(g)`, and `Weight Watchers(Points)`. In addition, all of the columns have type `chr`, so we need to convert them to `numeric` in order for the model to process these data properly.
+
+## Tidying Data
+
+Let's take a closer look at each predictor and make sure all uncommon data is handled properly.
+```{r, eval=FALSE}
+fastfood$Calories %>% factor() %>% levels()
+fastfood$Calories_from_Fat %>% factor() %>% levels()
+fastfood$Total_Fat_g %>% factor() %>% levels()
+fastfood$Saturated_Fat_g %>% factor() %>% levels()
+fastfood$Trans_Fat_g %>% factor() %>% levels()
+fastfood$Cholesterol_mg %>% factor() %>% levels()
+fastfood$Sodium_mg %>% factor() %>% levels()
+fastfood$Carbs_g %>% factor() %>% levels()
+fastfood$Fiber_g %>% factor() %>% levels()
+fastfood$Sugar_g %>% factor() %>% levels()
+fastfood$Protein_g %>% factor() %>% levels()
+fastfood$Weight_Watchers_pnts %>% factor() %>% levels()
+```
+
+
+```{r class.source = 'fold-show'}
+fastfood %>% 
+  filter_all(any_vars(. %in% c("5.5 g"))) %>% 
+  nrow
+fastfood %>% 
+  filter_all(any_vars(. %in% c("<5"))) %>% 
+  nrow
+fastfood %>% 
+  filter_all(any_vars(. %in% c("<1"))) %>% 
+  nrow
+```
+As we can see, there are some data cleaning we need to do. 
+
+* one `5.5 g` value in `Saturated_Fat_g` 
+* fourteen `<5` values
+* thiry one `<1` values
+
+These data will be lost when we convert the columns from character to numeric type. I chose to replace `5.5 g` to `5.5`, `<5` to `2.5`, and `<1` to `0.5`. After replacement, I can convert the column types to numeric.
+```{r}
+fastfood[fastfood=="<1"]<-"0.5"
+fastfood[fastfood=="<5"]<-"2.5"
+fastfood[fastfood=="5.5 g"]<-"5.5"
+fastfood <- fastfood %>% 
+  mutate_at(c('Calories', 'Calories_from_Fat', 'Total_Fat_g', 'Saturated_Fat_g', 'Trans_Fat_g',
+              'Total_Fat_g', 'Cholesterol_mg', 'Sodium_mg', 'Carbs_g', 'Fiber_g', 'Sugar_g', 
+              'Protein_g', 'Weight_Watchers_pnts'), as.numeric)
+str(fastfood)
+```
+
+## Missing Data
+Besides uncommon data, we should also handle any missing data. Let's check how many data is missing in the dataset and decide whether to remove the predictor or impute for their values.
+
+```{r}
+library(naniar)
+vis_miss(fastfood)
+# fastfood %>% summary()
+```
+There are significantly amount of missing data in `Calories from Fat` (516) and `Weight Watchers` (270) predictors. While we could potentially impute for these variables using other predictors, they do not provide necessarily additional information that will assist model prediction, so we should omit these 2 columns. In addition, as mentioned above, `Item` doesn't provide any useful information for predicting `Company`, so I will remove it as well.
+```{r}
+fastfood <- fastfood[, -4]
+fastfood <- fastfood[, -13]
+fastfood %>% summary()
+```
+Now even though there are still missing data in the dataset, taking a closer look at these rows, I realize that they are nutrition information related to drinks, which makes sense that they do not have information such as total fat. These data probably does not matter as much to our goal of predicting companies as these are common drinks that are not unique to companies. Therefore, we can remove them from the data set. Only 2 of them, `Soft Taco Supreme` from Taco Bell and `Salad Dressings` from McDonald's are not drinks, but removing them shouldn't affect too much for our task. 
+```{r}
+# fastfood[!complete.cases(fastfood), ]
+fastfood <- fastfood[complete.cases(fastfood), ]
+fastfood <- fastfood[, -2]
+fastfood %>%  summary()
+```
+
+# Exploratory Data Analysis
+
+## Company
+
+Now that all the missing values are handled, let's explore the data relationship. The first simple thing we might want to see is the distribution of how many menus are there in the dataset from each company.
+```{r}
+ggplot(fastfood, aes(x=Company)) + geom_bar(stat="count", fill="#69b3a2")+ 
+  ggtitle("Distribution of Menu Items from Fastfood Companies") +
+  xlab("Company") + 
+  ylab("Count")
+```
+
+As we can see, the dataset is imbalanced as there are more menu items from `McDonald's` and least from `Pizza Hut`, which encourages us to adopt resampling method to account for this. I will use k-fold cross validation method. The distribution also tells us that `McDonald's` possibly has the most diverse menus available to customers. 
+
+## Calories
+It would also be useful to look at distribution of calories across companies.
+```{r}
+fastfood %>%
+  ggplot( aes(x=Calories, fill=Company) ) +
+    geom_histogram( color="#e9ecef", alpha=0.6, position = 'identity') +
+    scale_fill_manual(values=c("#69b3a2","#404080","#FFFFCC","#CCE5FF","#FFCCE5", "red")) +
+    theme_ipsum() +
+    labs(fill="") +
+  facet_wrap(~Company)
+
+df <- fastfood %>% 
+  arrange(desc(Company)) %>% 
+  group_by(Company) %>% 
+  summarise(total=sum(Calories)) %>% 
+  mutate(prop=total/sum(total)) %>% 
+  mutate(label=scales::percent(prop))
+
+df %>% 
+  ggplot(aes(x="", y=prop, fill=Company)) +
+    geom_bar(stat="identity", width=1, color="white", alpha=0.6) +
+    coord_polar("y", start=0) +
+    theme_void() +
+    geom_text(aes(label = label), color = "black", size=4, position = position_stack(vjust = 0.5))+
+  scale_fill_manual(values=c("#69b3a2","#404080","#EE45AD","#CCE5FF","#FFCCE5", "red")) 
+```
+
+From both the histogram distributions and pie chart, we can see that `McDonald's` contributes the most to the total calories from all the companies, which could be because that `McDonald's` has generally higher calories menu or because it has the most amount of menu items as we seen above. All of them follow a similar distribution that peaks around 400 Calories and ranges from 0 all the way to 1200 calories. This high upper bound indicates the fact that some menus from fast food companies are high in calories and should be consumed with caution. 
+
+## Correlation
+We should also check beforehand if the predictors have any strong correlations so that we can handle them while creating the receipts.
+```{r}
+fastfood %>% 
+  select(is.numeric, -Company) %>% 
+  cor() %>% 
+  corrplot(type = "lower", diag = FALSE, method = "circle", addCoef.col = 1, number.cex = 0.7)
+```
+
+As expected, `Calories` is highly correlated with `Total Fat`, `Saturated Fat`, `Sodium` and `Protein`. Also, `Sugar` is highly correlated with `Carbs`, which is reasonable since `Sugar` is `Carbohydrate` as explained in the introduction section. I will include `step_pca()` to combat these 2 collinearities. To decide how many components I should include, let's look at the proportion of variations explained by pca plot.
+
+```{r}
+recipe(Company ~ . , data = fastfood) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_pca(all_predictors()) %>% 
+  prep() %>% 
+  tidy(num=2) %>% 
+  filter(component %in% paste0("PC", 1:4)) %>% 
+  group_by(component) %>% 
+  top_n(8, abs(value)) %>% 
+  ungroup() %>% 
+  mutate(terms = reorder_within(terms, abs(value), component)) %>%
+  ggplot(aes(abs(value), terms, fill = value > 0)) +
+  geom_col() +
+  facet_wrap(~component, scales = "free_y") +
+  scale_y_reordered() +
+  labs(
+    x = "Absolute value of contribution",
+    y = NULL, fill = "Positive?"
+  )
+```
+
+We can see that PC1 is about `Total Fat`, `Calories`, `Saturated Fat`, `Protein`, and `Sodium`, while PC2 is about `Sugar`and `Carbs`. This results corresponds to what we see from the correlate matrix. Let's see how much percentage of variance would be explained by reducing these predictors to 1 or 2 PC components. 
+
+```{r}
+var1 <- recipe(Company ~ . , data = fastfood) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_pca(Total_Fat_g, Saturated_Fat_g, Calories, Sodium_mg, Protein_g) %>% 
+  prep() %>% 
+  tidy(num=2, type = "variance")  %>% 
+  filter(component %in% paste0(1:4)) %>% 
+  filter(terms %in% c("cumulative percent variance", "percent variance")) %>% 
+  ggplot(aes(x=component, y=value, fill=factor(component))) +
+  geom_bar(stat="identity") +
+  facet_wrap(~terms, scales = "fixed") +
+  labs(y = "Percent Variance",
+       title="Percentage of Explained Variances\nTotal_Fat_g + Saturated_Fat_g + Calories + Sodium_mg + Protein_g",
+       fill="PC Component") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) 
+var2 <- recipe(Company ~ . , data = fastfood) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_pca(Sugar_g, Carbs_g) %>% 
+  prep() %>% 
+  tidy(num=2, type = "variance")  %>% 
+  filter(component %in% paste0(1:4)) %>% 
+  filter(terms %in% c("cumulative percent variance", "percent variance")) %>% 
+  ggplot(aes(x=component, y=value, fill=factor(component))) +
+  geom_bar(stat="identity") +
+  facet_wrap(~terms, scales = "fixed") +
+  labs(x = "PCA Components", y = "Percent Variance",
+       title="Sugar_g + Carbs_g",
+       fill="PC Component") +
+  theme(
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) 
+var1+var2+plot_layout(nrow = 2)
+```
+
+From the plot, we can see that by applying `step_pca()` on `Total_Fat_g`, `Saturated_Fat_g`, `Calories`, `Sodium_mg`, and `Protein_g`, PC1 explained over 75% of variance. Similar for `Sugar_g` and `Carbs_g`. Therefore, later when I create the recipe, I decide to apply 2 `step_pca()` on the sets of correlated predictors respectively to handle correlation.
+
+One counterintuitive relation from the correlation matrix is that while `sodium` is strongly positively related with `total fat`, `sugar` is weakly negatively related. Personally, I have assumed that higher amount of sugar would also lead to higher fat. Let's take a closer look at the relation between `Total Fat` and `Sugar`.
+```{r}
+fastfood %>% 
+  ggplot(aes(x=Sugar_g, y=Total_Fat_g)) + 
+  geom_jitter(width = 0.5, size = 1) +
+  geom_smooth(method = "lm", se =F, col="red") +
+  labs(title = "Total Fat (g) vs. Sugar (g)")
+```
+
+
+From the graph, there seems to be 3 relationships going on. One group of data has the relationship  that `Total Fat` increases regardless of `Sugar`. The second group of data has the relationship as `Sugar` increases, `Total Fat` also increases. The third group has the relationship where `Total Fat` doesn't change as `Sugar` increases. After taking a look at the data, I realize the third group comes mainly from menus that are marked as nonfat and the first group comes from high fat menus, such as pizza or fried chickens. The correlation is dominated by the number of 3rd group, which leads to the negative relationship we saw earlier. To see a better relationship, let's draw the 3 relationships independently. 
+
+```{r}
+df <- fastfood %>% 
+  select(Total_Fat_g, Sugar_g) %>% 
+  mutate(Group = case_when(Sugar_g<15 ~ 1,
+                           Total_Fat_g<3 ~ 2,
+                           TRUE ~ 3)) %>% 
+  mutate(Group = factor(Group))
+df %>% 
+  ggplot(aes(x=Sugar_g, y=Total_Fat_g, color=Group)) + 
+  geom_point(alpha=0.6) +
+  labs(title = "Total Fat (g) vs. Sugar (g)") +
+  geom_smooth(method = "lm", se =F, alpha=0.6) +
+  scale_color_manual(values=c("#69b3a2","deepskyblue","grey"),
+                     labels=c("High Fat Low Calories",
+                              "Low Fat High Sugar",
+                              "Other"))
+```
+
+
+# Model Setup
+
+Now that having a better idea of how our data looks like we can finally build and train our models! 
+
+## Data Split
+First thing to do is to split our data into training and testing set. On the training data, we should also create folds for cross validation to deal with the imbalanced dataset. Also, remember to set the seed so that other people can reproduce our results! We also verify at the end that the training and testing data are split properly according to the 0.7 proportion we specified.
+
+```{r class.source = 'fold-show'}
+set.seed(1105)
+fastfood_split <- initial_split(fastfood, prop = 0.7, strata = Company)
+fastfood_train <- training(fastfood_split)
+fastfood_test <- testing(fastfood_split)
+fastfood_folds <- vfold_cv(fastfood_train, v = 7, strata=Company)
+c(nrow(fastfood_train)/nrow(fastfood), nrow(fastfood_test)/nrow(fastfood))
+```
+
+
+## Recipe
+
+Next, we should create our recipe for our models. Originally, there are 11 predictors, including `Calories`, `Calories from Fat`, `Total Fat(g)`, `Saturated Fat(g)`, `Trans Fat(g)`, `Cholesterol(mg)`, `Sodium(mg)`, `Carbs(g)`, `Fiber(g)`, `Sugars(g)`, `Protein(g)`. As mentioned above, we apply 2 `step_pca` to the 2 sets of correlated predictors: 
+
+* `Total Fat`, `Calories`, `Saturated Fat`, `Protein`, `Sodium`
+* `Sugar`, `Carbs`
+
+ after normalizing them. At the end, there are 6 predictors left in the recipe as shown below. 
+```{r class.source = 'fold-show'}
+fastfood_recipe <- recipe(Company ~ . , data = fastfood_train) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_pca(Total_Fat_g, Saturated_Fat_g, Calories, Sodium_mg, Protein_g,
+           num_comp = 2, prefix = "first_pc") %>% 
+  step_pca(Sugar_g, Carbs_g,
+           num_comp = 1, prefix = "sec_pc") 
+
+prep(fastfood_recipe) %>% bake(new_data = fastfood_train) %>% head()
+```
+
+## Model Building
+
+Finally, we are ready to build our models! I will be training 5 different models, including `Logistic Regression`, `K-Nearest Neighbors`, `Elastic Net`, `Random Forest`, and `Boosted Tree`. Different hyperparameters for different models will be tuned to produce the best model performance. Given the number of models and folds for cross validation, the model training takes a long time. Therefore, the results are all saved to RDA files, which could be loaded without retraining the models. 
+```{r}
+log_reg <- multinom_reg(penalty = 0) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("classification")
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(fastfood_recipe)
+
+knn <- nearest_neighbor(neighbors = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("kknn")
+knn_wkflow <- workflow() %>% 
+  add_model(knn) %>% 
+  add_recipe(fastfood_recipe)
+
+en <- multinom_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>% 
+  set_mode("classification")
+en_wkflow <- workflow() %>% 
+  add_recipe(fastfood_recipe) %>% 
+  add_model(en)
+
+rf <- rand_forest(mtry = tune(), 
+                  trees = tune(), 
+                  min_n = tune()) %>%
+  set_engine("ranger") %>% 
+  set_mode("classification")
+rf_wkflow <- workflow() %>% 
+  add_model(rf) %>% 
+  add_recipe(fastfood_recipe)
+
+bt <- boost_tree(mtry = tune(), 
+                trees = tune(), 
+                learn_rate = tune()) %>%
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+bt_wkflow <- workflow() %>% 
+  add_model(bt) %>% 
+  add_recipe(fastfood_recipe)
+```
+
+
+```{r, eval=FALSE}
+knn_grid <- grid_regular(neighbors(range=c(1, 10)), levels = 10)
+en_grid <- grid_regular(penalty(), mixture(range=c(0, 1)), levels=10)
+rf_grid <- grid_regular(mtry(range = c(1, 6)), 
+                        trees(range = c(200, 600)),
+                        min_n(range = c(10, 20)),
+                        levels = 5)
+bt_grid <- grid_regular(mtry(range = c(1, 6)), 
+                        trees(range = c(200, 600)),
+                        learn_rate(range = c(-10, -1)),
+                        levels = 5)
+
+log_fit <- log_wkflow %>% 
+  fit_resamples(fastfood_folds)
+
+knn_tune <- tune_grid(
+  object = knn_wkflow, 
+  resamples = fastfood_folds, 
+  grid = knn_grid
+)
+en_tune <- tune_grid(
+  object = en_wkflow, 
+  resamples = fastfood_folds, 
+  grid = en_grid,
+  control = control_grid(verbose = TRUE)
+)
+rf_tune <- tune_grid(
+  rf_wkflow,
+  resamples = fastfood_folds,
+  grid = rf_grid,
+  control = control_grid(verbose = TRUE)
+)
+bt_tune <- tune_grid(
+  bt_wkflow, 
+  resamples = fastfood_folds,
+  grid = bt_grid,
+  control = control_grid(verbose = TRUE)
+)
+
+save(log_fit, file = "log_fit.rda")
+save(knn_tune, file = "knn_tune.rda")
+save(en_tune, file = "en_tune.rda")
+save(rf_tune, file = "rf_tune.rda")
+save(bt_tune, file = "bt_tune.rda")
+```
+
+# Results from Best Models
+
+Let's take a look at the model performance!
+```{r}
+load("log_fit.rda")
+load("knn_tune.rda")
+load("en_tune.rda")
+load("rf_tune.rda")
+load("bt_tune.rda")
+
+log_auc <- collect_metrics(log_fit) %>% 
+  filter(.metric=="roc_auc") %>% 
+  select(mean) %>% 
+  mutate(Model = "Logistic Regression", .before=mean)
+knn_auc <- show_best(knn_tune, metric = "roc_auc")%>% 
+  filter(.metric=="roc_auc", row_number()==1) %>% 
+  select(mean) %>% 
+  mutate(Model = "KNN", .before=mean)
+en_auc <- show_best(en_tune, metric = "roc_auc")%>% 
+  filter(.metric=="roc_auc", row_number()==1) %>% 
+  select(mean) %>% 
+  mutate(Model = "Elastic Net", .before=mean)
+rf_auc <- show_best(rf_tune, metric = "roc_auc")%>% 
+  filter(.metric=="roc_auc", row_number()==1) %>% 
+  select(mean) %>% 
+  mutate(Model = "Random Forest", .before=mean)
+bt_auc <- show_best(bt_tune, metric = "roc_auc")%>% 
+  filter(.metric=="roc_auc", row_number()==1) %>% 
+  select(mean) %>% 
+  mutate(Model = "Boosted Tree", .before=mean)
+bind_rows(list(log_auc, knn_auc, en_auc, rf_auc, bt_auc)) %>% 
+  arrange(desc(mean)) %>% 
+  rename(ROC_AUC=mean)
+```
+
+From the table we can see that `Boosted Tree`, `Random Forest`, and `KNN` perform the best in terms of `ROC_AUC`. Let's take a look at their individual results closely through plots. 
+```{r, fig.dim = c(10, 5)}
+bt_tune %>% autoplot()
+```
+
+Interesting enough, the number of trees doesn't affect the performance of `Boosted Tree`. The best performance (`ROC_AUC = 0.876`) is achieved when learning rate is 0.1 with 1 randomly selected predictor at each split when creating the tree models.
+
+```{r, fig.dim = c(10, 5)}
+rf_tune %>% autoplot()
+```
+Similarly for `Random Forest`, number of trees doesn't affect the performance too much. The best performance (`ROC_AUC = 0.872`) is achieved when minimal node size is 10 with 2 randomly selected predictors at each split when creating the tree models.
+
+```{r}
+knn_tune %>% autoplot()
+```
+
+Lastly, the performance of `KNN` model improves as the number of nearest neighbors increases. The best performance (`ROC_AUC = 0.845`) is achieved with 10 number of nearest neightbors. Presumably, `KNN` might perform even better if we allow more number of nearest neighbors to be tuned; however, we also need to remember that `KNN` could overfit easily to our training data if we keep increasing the number of nearest neighbors, so we will stop at 10 neighbors.
+
+# Testing
+Let's prepare our top 2 best performance models `Boosted Tree` and `Random Forest` for testing to see how they perform on unseen data. We will select the best performing `Boosted Tree` and `Random Forest` models and fit them to the testing data.
+```{r}
+best_bt <- select_best(bt_tune, metric = "roc_auc")
+bt_final_fit <- finalize_workflow(bt_wkflow, best_bt) %>% 
+  fit(fastfood_train)
+best_rf <- select_best(rf_tune, metric = "roc_auc")
+rf_final_fit <- finalize_workflow(rf_wkflow, best_rf) %>% 
+  fit(fastfood_train)
+bt_test <- augment(bt_final_fit, fastfood_test) %>% 
+  select(Company, starts_with(".pred")) %>% 
+  clean_names() %>% 
+  roc_auc(company, pred_mc_donald_s:pred_pizza_hut)
+rf_test <- augment(rf_final_fit, fastfood_test) %>% 
+  select(Company, starts_with(".pred")) %>% 
+  clean_names() %>% 
+  roc_auc(company, pred_mc_donald_s:pred_pizza_hut)
+bind_rows(list(bt_test, rf_test)) %>% 
+  select(.estimate) %>% 
+  mutate(Model = c("Boosted Tree", "Random Forest"), .before=.estimate) %>% 
+  arrange(desc(.estimate)) %>% 
+  rename(ROC_AUC=.estimate)
+```
+Yeah!! Our models `Boosted Tree` and `Random Forest` both perform pretty well even on testing data, with `ROC_AUC=0.888` and `ROC_AUC=0.876` respectively. Impressive! This is not what I expected since I assumed all fastfood companies would probably have pretty similar high calories menus that are not easy to be distinguished from each other. Can you guess which company is the easiest for `Boosted Tree` to predict? The answer is....
+
+```{r}
+augment(bt_final_fit, fastfood_test) %>% 
+  select(Company, starts_with(".pred")) %>% 
+  clean_names() %>% 
+  roc_curve(company, pred_mc_donald_s:pred_pizza_hut) %>% 
+  autoplot()
+augment(bt_final_fit, fastfood_test) %>% 
+  select(Company, starts_with(".pred")) %>% 
+  conf_mat(Company, .pred_class) %>% 
+  autoplot(type = "heatmap")
+```
+
+Pizza Hut?! The company with the least number of menu items in our training data?! From the confusion matrix, we can see that out of all 15 `Pizza Hut` menu items, `Boosted Tree` predicted 13 of them correctly. `Pizza Hut` also has the largest `ROC_AUC`. Out of curiosity, I found a `Pizza Hut` menu online that is not included in our dataset. Let's see if our model can predict it correctly.
+
+```{r class.source = 'fold-show'}
+hot_honey_double_pepperoni <- data.frame(
+  Company = "Pizza Hut",
+  Calories = 360,
+  Total_Fat_g = 17,
+  Saturated_Fat_g = 7,
+  Trans_Fat_g = 0,
+  Cholesterol_mg = 45,
+  Sodium_mg = 780,
+  Carbs_g = 38,
+  Fiber_g = 3,
+  Sugar_g = 6,
+  Protein_g = 15
+)
+predict(bt_final_fit, hot_honey_double_pepperoni, type = "class")
+```
+Amazing! The `Boosted Tree` model indeed predicts this new menu to come from `Pizza Hut`. Let's probe into the model a bit and see if we can figure out why it predicts like this.
+```{r, fig.dim = c(6, 15)}
+features <- c('Calories', 'Total_Fat_g', 'Saturated_Fat_g', 'Trans_Fat_g',
+              'Cholesterol_mg', 'Sodium_mg', 'Carbs_g', 'Fiber_g', 'Sugar_g',
+              'Protein_g')
+vip_train <- fastfood_train %>% select(all_of(features))
+explainer_bt <- explain_tidymodels(
+  bt_final_fit,
+  data=vip_train,
+  y=fastfood_train$Company,
+  label="Boosted Tree",
+  verbose=FALSE
+)
+predict_parts(explainer = explainer_bt, new_observation = hot_honey_double_pepperoni) %>% plot()
+```
+
+From the plot, we can see that `Total Fat=17` contributes the most to the model's prediction on `Pizza Hut` being the company where the new menu comes from. Not entirely sure explanation for this since given the coplexity of `Boosted Tree`, these models are usually less explanable. However, one thing for sure is that the models are trained well to classify menus from different companies. 
+
+# Conclusion
+In this project, we explored, analyzed, and trained models on the nutrition facts from different fastfood companies' menus, trying to see if these companies hold any difference in nutrition facts that will set them apart. To my surprise, our models are trained really well in classifying menus to the correct company even though I thought all the fastfood will be generally the same. Out of all the models, we see that `Boosted Tree` performed the best with an `ROC_AUC=0.888` performance on the testing data. 
+
+From the results, we can probably say that each company has their own unique recipe that set them apart from each other. Especially for `Pizza Hut`, they might have some secret recipe that set them apart from other fastfood companies. Unfortunately, given the complex behavior of our models, it is hard to probe into why and how the models predict this way. In the future, it would be helpful to dig deep into the model behaviors and interpret the reasons behind model decisions. 
+
+# Citation
+Arvidsson, Joakim. *Fast Food Nutrition*, 2023. Kaggle. Date accessed: Mar 18th, 2024. https://www.kaggle.com/datasets/joebeachcapital/fast-food/code
